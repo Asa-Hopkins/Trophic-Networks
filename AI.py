@@ -1,5 +1,7 @@
 import numpy as np
 
+#import time; t=time.time(); train, test = load_mnist(); x = network([784,10,10],[tanh,Dtanh]); x.train(train,test); print(time.time()-t)
+
 def sigmoid(x):
     return 1/(1+np.exp(-x))
 
@@ -10,7 +12,7 @@ def tanh(x):
     return np.tanh(x)
 
 def Dtanh(x,y):
-    return (1-x**2)
+    return (1-x*x)
 
 def load_mnist():
     f=open("./MNIST/train-images.idx3-ubyte",'rb');images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(60000,784)/255.0;f.close()
@@ -20,20 +22,21 @@ def load_mnist():
     return [images, labels, [784,10,60000]], [test_images, test_labels,[784,10,10000]]
 
 def load_balanced_emnist():
-    f=open("./EMNIST/Balanced/emnist-balanced-train-images-idx3-ubyte",'rb');images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(112800,784)/255.0;f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-train-labels-idx1-ubyte",'rb');labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-test-images-idx3-ubyte",'rb');test_images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(18800,784)/255.0;f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-test-labels-idx1-ubyte",'rb');test_labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
+    f=open("./EMNIST/Balanced/emnist-balanced-train-images.idx3-ubyte",'rb');images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(112800,784)/255.0;f.close()
+    f=open("./EMNIST/Balanced/emnist-balanced-train-labels.idx1-ubyte",'rb');labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
+    f=open("./EMNIST/Balanced/emnist-balanced-test-images.idx3-ubyte",'rb');test_images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(18800,784)/255.0;f.close()
+    f=open("./EMNIST/Balanced/emnist-balanced-test-labels.idx1-ubyte",'rb');test_labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
     return [images, labels, [784,62,112800]], [test_images, test_labels,[784,62,18800]]
 
 class network:
-    def __init__(self,layout,activation,BATCH=16,seed=42,ETA=0.00001,ALPHA = 0.99):
+    def __init__(self, layout, activation, BATCH=16, seed=42, method="Momentum", hyper=[0.99,0.00001]):
+
+        self.method = method
+        self.hyper = hyper
         self.layout = layout
-        self.ETA = ETA
         self.BATCH = BATCH
         self.seed = seed
-        self.ALPHA = ALPHA
-        self.best = [[1e99,0],[0,0]] #Best fitness in [0], most correct in [1], and which iteration it's achieved.
+        self.best = [[1e99,0], [0,0], 0] #Best fitness in [0], most correct in [1], and which iteration it's achieved.
         self.activation = activation #activation[0] is activation function, [1] is its derivative.
         np.random.seed(seed)
         self.W = []
@@ -41,11 +44,13 @@ class network:
         self.dnodes = [0]
         self.pnodes = [0] #Contains value of nodes before activation function, used for some derivatives
         for i in range(0,len(layout)-1):
-            self.W.append(np.random.randn(layout[i+1],layout[i])*np.sqrt(1/layout[i]))
+            self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/layout[i]))
             self.nodes.append(0)
             self.dnodes.append(0)
             self.pnodes.append(0)
         self.dW = [np.zeros(i.shape) for i in self.W]
+        self.g = [np.zeros(i.shape) for i in self.W]
+        self.rms = [np.zeros(i.shape) for i in self.W]
 
     def train(self, data, test_data,EPOCHS=10):
         for a in range(EPOCHS):
@@ -57,20 +62,29 @@ class network:
                 #Forward pass
                 for n,i in enumerate(self.W):
                     self.pnodes[n+1] = i.dot(self.nodes[n])
-                    #print(self.nodes[n+1])
                     self.nodes[n+1] = self.activation[0](self.pnodes[n+1])
                     
                 target = np.zeros(self.layout[-1]*self.BATCH)
-                target[np.arange(0,self.BATCH*self.layout[-1],self.layout[-1])+correct]=1
+                target[np.arange(0,self.BATCH*self.layout[-1],self.layout[-1])+correct] = 1
                 target = np.transpose(target.reshape(self.BATCH,self.layout[-1]))
                                     
                 #Back propagation:
-                self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.ETA*self.activation[1](self.nodes[-1],self.pnodes[-1])
-                for i in range(len(self.W)-1,-1,-1):
-                    self.dW[i] *= self.ALPHA
-                    self.dW[i] += np.einsum('ji,ki->jk',self.dnodes[i+1], self.nodes[i])
-                    self.dnodes[i] = np.transpose(self.W[i]).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
-                    self.W[i] -= self.dW[i]
+                if self.method == "Momentum":
+                    self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])*self.hyper[1]
+                    for i in range(len(self.W)-1,-1,-1):
+                        self.dW[i] = self.hyper[0]*self.dW[i] + np.einsum('ji,ki->jk',self.dnodes[i+1], self.nodes[i])
+                        self.dnodes[i] = np.transpose(self.W[i]).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
+                        self.W[i] -= self.dW[i]
+                
+                elif self.method == "AdaDelta":
+                    self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])
+                    for i in range(len(self.W)-1,-1,-1):
+                        self.rms[i] = self.hyper[0]*self.rms[i] + (1-self.hyper[0])*self.dW[i]**2
+                        self.dW[i] = np.einsum('ji,ki->jk',self.dnodes[i+1], self.nodes[i])
+                        self.g[i] = self.hyper[0]*self.g[i] + (1-self.hyper[0])*self.dW[i]**2
+                        self.dW[i] *= np.sqrt((self.rms[i]+self.hyper[1])/(self.g[i]+self.hyper[1]))
+                        self.dnodes[i] = np.transpose(self.W[i]).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
+                        self.W[i] -= self.dW[i]
                 
             self.nodes[0] = np.transpose(test_data[0])
             for n,i in enumerate(self.W):
@@ -85,12 +99,10 @@ class network:
                 self.best[0] = [loss,a]
             if c > self.best[1][0]:
                 self.best[1] = [c,a]
+            self.best[2] = a
             print(loss, c)
            
 def genetic(pop,generations,data,labels,layout):
-    #BATCH = [2**x for x in range(8)]
-    #ETA = [
-
     
     x = np.random.randint(60000,size=BATCH)
     In = np.transpose(data[x]/255.0)

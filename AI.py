@@ -1,6 +1,10 @@
 import numpy as np
 import coherent_networks
-#import time; t=time.time(); train, test = load_mnist(); x = network([784,10,10],[tanh,Dtanh]); x.train(train,test); print(time.time()-t)
+import copy
+import scipy
+from opt_einsum import contract
+
+#import time; train, test = load_mnist(); x = network([784,10,10],[tanh,Dtanh]); t=time.process_time(); x.train(train,test); print(time.process_time()-t)
 
 def sigmoid(x):
     return 1/(1+np.exp(-x))
@@ -26,17 +30,18 @@ def load_mnist():
 def load_balanced_emnist():
     """Loads the extended MNIST data set, returns a pair of lists (one for the training set, one for the testing set) containing
         the images,labels, inputs per image, number of classes and number of images."""
-    f=open("./EMNIST/Balanced/emnist-balanced-train-images.idx3-ubyte", 'rb'); images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(112800,784)/255.0; f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-train-labels.idx1-ubyte", 'rb'); labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-test-images.idx3-ubyte", 'rb'); test_images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(18800,784)/255.0; f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-test-labels.idx1-ubyte", 'rb'); test_labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
-    return [images, labels, 784, 62, 112800], [test_images, test_labels, 784, 62, 18800]
+    f=open("./EMNIST/Balanced/emnist-balanced-train-images-idx3-ubyte", 'rb'); images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(112800,784)/255.0; f.close()
+    f=open("./EMNIST/Balanced/emnist-balanced-train-labels-idx1-ubyte", 'rb'); labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
+    f=open("./EMNIST/Balanced/emnist-balanced-test-images-idx3-ubyte", 'rb'); test_images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(18800,784)/255.0; f.close()
+    f=open("./EMNIST/Balanced/emnist-balanced-test-labels-idx1-ubyte", 'rb'); test_labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
+    return [images, labels, 784, 47, 112800], [test_images, test_labels, 784, 47, 18800]
 
 class network:
-    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=16, seed=42, method="Momentum", hyper=[0.99,0.00001]):
+    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.99,0.00001], sparsity=0):
         self.fit = 0
         self.size = 0
         self.correct = 0
+        self.sparsity = sparsity
         self.method = method
         self.hyper = hyper
         self.layout = layout
@@ -46,25 +51,33 @@ class network:
         self.activation = activation #activation[0] is activation function, [1] is its derivative.
         np.random.seed(seed)
         self.W = []
+        self.rows = []
+        self.cols = []
         self.nodes = [0]
         self.dnodes = [0]
         self.pnodes = [0] #Contains value of nodes before activation function, used for some derivatives
         for i in range(0, len(layout)-1):
-            self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/layout[i]))
+            self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/(layout[i]*(1-sparsity))))
+            if sparsity:
+                temp = np.random.random((layout[i+1],layout[i])) > sparsity
+                self.rows.append(np.nonzero(temp)[0])
+                self.cols.append(np.nonzero(temp)[1])
+                self.W[-1] = scipy.sparse.csr_matrix(self.W[-1]*temp)
             self.size += layout[i+1]*layout[i]
             self.nodes.append(0)
             self.dnodes.append(0)
             self.pnodes.append(0)
-        self.dW = [np.zeros(i.shape) for i in self.W]
-        self.g = [np.zeros(i.shape) for i in self.W]
-        self.rms = [np.zeros(i.shape) for i in self.W]
+        self.dW = [i*0 for i in self.W]
+        self.g = copy.deepcopy(self.dW)
+        self.rms = copy.deepcopy(self.dW)
 
     def train(self, data, test_data,EPOCHS=10):
+        temp = []
         for a in range(EPOCHS):
             randints = np.random.randint(data[4],size=(data[4] - data[4]%self.BATCH)) #train for EPOCHS, testing after each
-            for i in range(int(data[4]/self.BATCH)):
+            for i in range(data[4]//self.BATCH):
                 x = randints[i*self.BATCH:(i+1)*self.BATCH]
-                self.nodes[0] = np.transpose(data[0][x])
+                self.nodes[0] = data[0][x].T
                 correct = data[1][x]
                 
                 #Forward pass
@@ -74,34 +87,54 @@ class network:
                     
                 target = np.zeros(self.layout[-1]*self.BATCH)
                 target[np.arange(0,self.BATCH*self.layout[-1],self.layout[-1])+correct] = 1
-                target = np.transpose(target.reshape(self.BATCH,self.layout[-1]))
+                target = target.reshape(self.BATCH,self.layout[-1]).T
                                     
                 #Back propagation:
                 if self.method == "Momentum":
                     self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])*self.hyper[1]
                     for i in range(len(self.W)-1,-1,-1):
-                        self.dW[i] = self.hyper[0]*self.dW[i] + np.einsum('ji,ki->jk',self.dnodes[i+1], self.nodes[i])
-                        self.dnodes[i] = np.transpose(self.W[i]).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
-                        self.W[i] -= self.dW[i]
+                        if self.sparsity:
+                            self.dW[i].data *= self.hyper[0]
+                            self.dW[i].data += np.einsum('ik,ik->i',self.dnodes[i+1][self.rows[i],:],self.nodes[i][self.cols[i],:])
+                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
+                            self.W[i].data -= self.dW[i].data
+                        else:
+                            self.dW[i] *= self.hyper[0]
+                            self.dW[i] += self.dnodes[i+1].dot(self.nodes[i].T)
+                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
+                            self.W[i] -= self.dW[i]
                 
                 elif self.method == "AdaDelta":
                     self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])
-                    for i in range(len(self.W)-1,-1,-1):
-                        self.rms[i] = self.hyper[0]*self.rms[i] + (1-self.hyper[0])*self.dW[i]**2
-                        self.dW[i] = np.einsum('ji,ki->jk',self.dnodes[i+1], self.nodes[i])
-                        self.g[i] = self.hyper[0]*self.g[i] + (1-self.hyper[0])*self.dW[i]**2
-                        self.dW[i] *= np.sqrt((self.rms[i]+self.hyper[1])/(self.g[i]+self.hyper[1]))
-                        self.dnodes[i] = np.transpose(self.W[i]).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
-                        self.W[i] -= self.dW[i]
+                    for i in range(len(self.W)-1,-1,-1):                        
+                        if self.sparsity:
+                            self.rms[i].data *= self.hyper[0]
+                            self.rms[i].data += (1-self.hyper[0])*self.dW[i].data**2
+                            self.dW[i].data = np.einsum('ik,ik->i',self.dnodes[i+1][self.rows[i],:],self.nodes[i][self.cols[i],:])              
+                            self.g[i].data *= self.hyper[0]
+                            self.g[i].data += (1-self.hyper[0])*self.dW[i].data**2
+                            self.dW[i].data *= np.sqrt((self.rms[i].data+self.hyper[1])/(self.g[i].data+self.hyper[1]))
+                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
+                            self.W[i].data -= self.dW[i].data
+
+                        else:
+                            self.rms[i] *= self.hyper[0]
+                            self.rms[i] += (1-self.hyper[0])*self.dW[i]**2
+                            self.dW[i] = self.dnodes[i+1].dot(self.nodes[i].T)
+                            self.g[i] *= self.hyper[0]
+                            self.g[i] += (1-self.hyper[0])*self.dW[i]**2
+                            self.dW[i] *= np.sqrt((self.rms[i]+self.hyper[1])/(self.g[i]+self.hyper[1]))
+                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
+                            self.W[i] -= self.dW[i]
 
             #Measure performance against test set:
-            self.nodes[0] = np.transpose(test_data[0])
+            self.nodes[0] = test_data[0].T
             for n,i in enumerate(self.W):
                 self.pnodes[n+1] = i.dot(self.nodes[n])
                 self.nodes[n+1] = self.activation[0](self.pnodes[n+1])
             target = np.zeros(test_data[4]*self.layout[-1])
             target[np.arange(0,test_data[4]*self.layout[-1],self.layout[-1])+test_data[1]]=1
-            target = np.transpose(target.reshape(test_data[4],self.layout[-1]))
+            target = target.reshape(test_data[4],self.layout[-1]).T
             c = np.sum(np.argmax(self.nodes[-1],0)==test[1])/test_data[4]
             loss = np.sum((self.nodes[-1]-target)**2)
             if loss < self.best[0][0]:
@@ -173,11 +206,11 @@ def genetic(pop,generations,data,test,layout):
     networks = []
     for i in range(pop):
         networks.append(network(layout))
-        networks[i].fitness([In,correct])
+        networks[i].fitness([In,correct,test[2],test[3],test[4]])
     for i in range(generations):
         networks = selection(networks)
         print("Generation ", i, ": Best fitness",networks[0].fit, " with", networks[0].correct, " correct predictions")
         networks = crossover(networks,pop)
         networks = mutation(networks)
         for n in networks[int(0.2 * len(networks)):]:
-            n.fitness([In,correct])
+            n.fitness([In,correct,test[2],test[3],test[4]])

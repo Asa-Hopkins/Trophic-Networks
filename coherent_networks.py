@@ -150,12 +150,12 @@ def coherence_stats(G):
     stats = dict.fromkeys(["q", "s", "x", "b"], None)
 
     # get the adjacency matrix
-    A = nx.adj_matrix(G)
+    A = nx.adjacency_matrix(G)
 
     # get degree sequences
     outDeg = np.fromiter([d for n, d in G.out_degree()], dtype=int)
+    print(sum(outDeg == 0))
     inDeg = np.fromiter([d for n, d in G.in_degree()], dtype=int)
-
     # if no basal nodes found, return NaN
     nnz = np.count_nonzero(inDeg)
     if nnz == len(inDeg):
@@ -196,36 +196,37 @@ def coherence_stats(G):
 
     return stats
 
-##import matplotlib.pyplot as plt
-##def draw(G):
-##    pos = dict()
-##    s = coherence_stats(G)['s']
-##    for a in G.nodes:
-##        pos[a] = (np.random.random(),s[a])
-##    #pos=nx.spring_layout(G,k=2,pos=pos)
-##    nx.draw_networkx_nodes(G, pos)
-##    nx.draw_networkx_edges(G, pos, edge_color='r', arrows = True)
-##    plt.show()
+def draw(G):
+    import matplotlib.pyplot as plt
+    pos = dict()
+    s = coherence_stats(G)['s']
+    for a in G.nodes:
+        pos[a] = (np.random.random(),s[a])
+    #pos=nx.spring_layout(G,k=2,pos=pos)
+    nx.draw_networkx_nodes(G, pos)
+    #nx.draw_networkx_edges(G, pos, edge_color='r', arrows = True)
+    plt.show()
 
 def edges(G):
     # creates a list of nodes, with a list of incoming and outgoing edges.
     # List is sorted by tropic level, so feeding forward and backwards propagation are easier.
     edges = []
+    s = coherence_stats(G)['s']
+    level = np.argsort(s)
     x = np.array(G.edges)
-    for i in G.nodes:
-        # represent each edge by a single integer, so (x,y) becomes x*nodes+y
-        edges.append([i,x[x[:,0]==i][:,1],x[x[:,1]==i][:,0]])
-    edges = np.array(edges, dtype=object)[np.argsort(coherence_stats(G)['s'])]
+    for i in level:
+        edges.append([np.where(level == i)[0][0],
+                      [np.where(level == a)[0][0] for a in x[x[:,1]==i][:,0]]
+                      ,[np.where(level == a)[0][0] for a in x[x[:,0]==i][:,1]]])
+    edges = np.array(edges, dtype=object)#[level]
     layers = [0] #Cut nodes into sections, with nodes within a given section being independent
-    test = []
     #The algorithm used is simple, and a more sophisticated algorithm may be able to give more efficient sectioning
     temp = set()
-    for n,i in enumerate(edges):
+    for i in edges:
         if i[0] in temp:
-            layers.append(n)
-            test.append(len(temp))
+            layers.append(i[0])
             temp = set()
-        temp = temp.union(i[1])
+        temp = temp.union(i[2])
+    return edges, layers, level
 
-#G = coherent_graph(B=10, N=100, L=200, T=0.5);x,y = edges(G); s=coherence_stats(G)
-    return edges, layers, test
+#G = coherent_graph(B=10, N=100, L=200, T=0.5);x,y,z = edges(G); s=coherence_stats(G)

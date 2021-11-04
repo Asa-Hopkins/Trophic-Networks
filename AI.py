@@ -1,10 +1,9 @@
 import numpy as np
 import coherent_networks
 import copy
-import scipy
-from opt_einsum import contract
+from scipy import sparse
 
-#import time; train, test = load_mnist(); x = network([784,10,10],[tanh,Dtanh]); t=time.process_time(); x.train(train,test); print(time.process_time()-t)
+#import time; train, test = load_mnist(); x = network([784,10,10],[tanh,Dtanh]); t=time.time(); x.train(train,test); print(time.time()-t)
 
 def sigmoid(x):
     return 1/(1+np.exp(-x))
@@ -41,7 +40,7 @@ class network:
         self.fit = 0
         self.size = 0
         self.correct = 0
-        self.sparsity = sparsity
+        self.sparsity = sparsity # List containing hyperparameters epsilon and zeta (from 1707.04780)
         self.method = method
         self.hyper = hyper
         self.layout = layout
@@ -57,22 +56,28 @@ class network:
         self.dnodes = [0]
         self.pnodes = [0] #Contains value of nodes before activation function, used for some derivatives
         for i in range(0, len(layout)-1):
-            self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/(layout[i]*(1-sparsity))))
             if sparsity:
-                temp = np.random.random((layout[i+1],layout[i])) > sparsity
-                self.rows.append(np.nonzero(temp)[0])
-                self.cols.append(np.nonzero(temp)[1])
-                self.W[-1] = scipy.sparse.csr_matrix(self.W[-1]*temp)
+                temp = (1-sparsity[0])*(layout[i+1]+layout[i])/(layout[i+1]*layout[i])
+                self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/temp))
+                temp = np.random.random((layout[i+1],layout[i])) < temp
+                self.W[-1] = sparse.csr_matrix(self.W[-1]*temp)
+                print(np.size(self.W[-1]))
+                temp = np.nonzero(temp)
+                self.rows.append(temp[0])
+                self.cols.append(temp[1])
+                del(temp)
+            else:
+                self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/(layout[i])))
             self.size += layout[i+1]*layout[i]
             self.nodes.append(0)
             self.dnodes.append(0)
             self.pnodes.append(0)
         self.dW = [i*0 for i in self.W]
         self.g = copy.deepcopy(self.dW)
+        print(self.size)
         self.rms = copy.deepcopy(self.dW)
 
     def train(self, data, test_data,EPOCHS=10):
-        temp = []
         for a in range(EPOCHS):
             randints = np.random.randint(data[4],size=(data[4] - data[4]%self.BATCH)) #train for EPOCHS, testing after each
             for i in range(data[4]//self.BATCH):
@@ -95,7 +100,7 @@ class network:
                     for i in range(len(self.W)-1,-1,-1):
                         if self.sparsity:
                             self.dW[i].data *= self.hyper[0]
-                            self.dW[i].data += np.einsum('ik,ik->i',self.dnodes[i+1][self.rows[i],:],self.nodes[i][self.cols[i],:])
+                            self.dW[i].data += np.einsum('ik,ik->i',self.dnodes[i+1].take(self.rows[i],0),self.nodes[i].take(self.cols[i],0))
                             self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
                             self.W[i].data -= self.dW[i].data
                         else:
@@ -107,7 +112,7 @@ class network:
                 elif self.method == "AdaDelta":
                     self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])
                     for i in range(len(self.W)-1,-1,-1):                        
-                        if self.sparsity:
+                        if self.sparsity: #By using .data it skips verifying coordinates
                             self.rms[i].data *= self.hyper[0]
                             self.rms[i].data += (1-self.hyper[0])*self.dW[i].data**2
                             self.dW[i].data = np.einsum('ik,ik->i',self.dnodes[i+1][self.rows[i],:],self.nodes[i][self.cols[i],:])              
@@ -142,6 +147,24 @@ class network:
             if c > self.best[1][0]:
                 self.best[1] = [c,a]
             self.best[2] = a
+            if self.sparsity: #remove self.sparsity[1] edges, introduce that many new ones
+                for n in range(len(self.W)):
+                    if self.sparsity[1]==0: continue
+                    s = np.size(self.W[n])
+                    remove = int(self.sparsity[1]*s)
+                    temp = np.argpartition(np.abs(self.W[n].data),remove)[:remove]
+                    self.W[n].data[temp] = 0 #remove lowest few values
+                    self.W[n].eliminate_zeros()
+                    self.W[n] = sparse.lil_matrix(self.W[n])
+                    while np.size(self.W[n])<s: #Need to be careful about picking already nonzero elements when choosing new edges to add
+                        x, y = np.random.randint(0,self.layout[n+1]), np.random.randint(0,self.layout[n]) #not an idea solution but shouldn't be a huge bottleneck
+                        if self.W[n][x,y] == 0:
+                            self.W[n][x,y] = np.random.randn(1) * np.sqrt(1/s)
+                    self.W[n] = sparse.csr_matrix(self.W[n])
+                    self.dW[n] = copy.deepcopy(self.W[n])
+                    self.dW[n].data *= 0
+                    self.cols[n], self.rows[n], _ = sparse.find(self.W[n].T)
+                    #self.sparsity[1] = 0.1
             print(loss, c)
 
     def fitness(self,data):

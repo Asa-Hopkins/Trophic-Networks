@@ -24,6 +24,7 @@ def load_mnist():
     f=open("./MNIST/train-labels.idx1-ubyte",'rb');labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
     f=open("./MNIST/t10k-images.idx3-ubyte",'rb');test_images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(10000,784)/255.0;f.close()
     f=open("./MNIST/t10k-labels.idx1-ubyte",'rb');test_labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
+    images -= np.mean(images); test_images -= np.mean(test_images)
     return [images, labels, 784, 10, 60000], [test_images, test_labels, 784, 10, 10000]
 
 def load_balanced_emnist():
@@ -42,24 +43,24 @@ class network:
         self.correct = 0
         self.sparsity = sparsity # List containing hyperparameters epsilon and zeta (from 1707.04780)
         self.method = method
-        self.hyper = hyper
+        self.hyper = hyper #Contains hyperparameters for the learning method used, e.g momentum and learning rate
         self.layout = layout
         self.BATCH = BATCH
         self.seed = seed
         self.best = [[1e99, 0], [0,0], 0] #Best fitness in [0], most correct in [1], and which iteration it's achieved.
         self.activation = activation #activation[0] is activation function, [1] is its derivative.
         np.random.seed(seed)
-        self.W = []
+        self.W = [] #List of weight matrices
         self.rows = []
         self.cols = []
         self.nodes = [0]
         self.dnodes = [0]
         self.pnodes = [0] #Contains value of nodes before activation function, used for some derivatives
-        for i in range(0, len(layout)-1):
+        for n in range(0, len(layout)-1):
             if sparsity:
-                temp = (1-sparsity[0])*(layout[i+1]+layout[i])/(layout[i+1]*layout[i])
-                self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/temp))
-                temp = np.random.random((layout[i+1],layout[i])) < temp
+                temp = (1-sparsity[0])*(layout[n+1]+layout[n])/(layout[n+1]*layout[n])
+                self.W.append(np.random.randn(layout[n+1],layout[n]) * np.sqrt(1/(layout[n]*temp)))
+                temp = np.random.random((layout[n+1],layout[n])) < temp
                 self.W[-1] = sparse.csr_matrix(self.W[-1]*temp)
                 print(np.size(self.W[-1]))
                 temp = np.nonzero(temp)
@@ -67,8 +68,8 @@ class network:
                 self.cols.append(temp[1])
                 del(temp)
             else:
-                self.W.append(np.random.randn(layout[i+1],layout[i]) * np.sqrt(1/(layout[i])))
-            self.size += layout[i+1]*layout[i]
+                self.W.append(np.random.randn(layout[n+1],layout[n]) * np.sqrt(1/(layout[n])))
+            self.size += np.size(self.W[-1])
             self.nodes.append(0)
             self.dnodes.append(0)
             self.pnodes.append(0)
@@ -80,63 +81,62 @@ class network:
     def train(self, data, test_data,EPOCHS=10):
         for a in range(EPOCHS):
             randints = np.random.randint(data[4],size=(data[4] - data[4]%self.BATCH)) #train for EPOCHS, testing after each
-            for i in range(data[4]//self.BATCH):
-                x = randints[i*self.BATCH:(i+1)*self.BATCH]
+            for j in range(data[4]//self.BATCH):
+                x = randints[j*self.BATCH:(j+1)*self.BATCH]
                 self.nodes[0] = data[0][x].T
                 correct = data[1][x]
                 
                 #Forward pass
-                for n,j in enumerate(self.W):
-                    self.pnodes[n+1] = j.dot(self.nodes[n])
+                for n,i in enumerate(self.W):
+                    self.pnodes[n+1] = i.dot(self.nodes[n])
                     self.nodes[n+1] = self.activation[0](self.pnodes[n+1])
                     
                 target = np.zeros(self.layout[-1]*self.BATCH)
                 target[np.arange(0,self.BATCH*self.layout[-1],self.layout[-1])+correct] = 1
                 target = target.reshape(self.BATCH,self.layout[-1]).T
-                                    
+                                 
                 #Back propagation:
                 if self.method == "Momentum":
                     self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])*self.hyper[1]
-                    for i in range(len(self.W)-1,-1,-1):
+                    for n in range(len(self.W)-1,-1,-1):
                         if self.sparsity:
-                            self.dW[i].data *= self.hyper[0]
-                            self.dW[i].data += np.einsum('ik,ik->i',self.dnodes[i+1].take(self.rows[i],0),self.nodes[i].take(self.cols[i],0))
-                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
-                            self.W[i].data -= self.dW[i].data
+                            self.dW[n].data *= self.hyper[0]
+                            self.dW[n].data += np.einsum('ik,ik->i',self.dnodes[n+1].take(self.rows[n],0),self.nodes[n].take(self.cols[n],0))
+                            self.dnodes[n] = (self.W[n].T).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
+                            self.W[n].data -= self.dW[n].data
                         else:
-                            self.dW[i] *= self.hyper[0]
-                            self.dW[i] += self.dnodes[i+1].dot(self.nodes[i].T)
-                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
-                            self.W[i] -= self.dW[i]
+                            self.dW[n] *= self.hyper[0]
+                            self.dW[n] += self.dnodes[n+1].dot(self.nodes[n].T)
+                            self.dnodes[n] = (self.W[n].T).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
+                            self.W[n] -= self.dW[n]
                 
                 elif self.method == "AdaDelta":
                     self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])
-                    for i in range(len(self.W)-1,-1,-1):                        
+                    for n in range(len(self.W)-1,-1,-1):                        
                         if self.sparsity: #By using .data it skips verifying coordinates
-                            self.rms[i].data *= self.hyper[0]
-                            self.rms[i].data += (1-self.hyper[0])*self.dW[i].data**2
-                            self.dW[i].data = np.einsum('ik,ik->i',self.dnodes[i+1][self.rows[i],:],self.nodes[i][self.cols[i],:])              
-                            self.g[i].data *= self.hyper[0]
-                            self.g[i].data += (1-self.hyper[0])*self.dW[i].data**2
-                            self.dW[i].data *= np.sqrt((self.rms[i].data+self.hyper[1])/(self.g[i].data+self.hyper[1]))
-                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
-                            self.W[i].data -= self.dW[i].data
+                            self.rms[n].data *= self.hyper[0]
+                            self.rms[n].data += (1-self.hyper[0])*self.dW[n].data**2
+                            self.dW[n].data = np.einsum('ik,ik->i',self.dnodes[n+1][self.rows[n],:],self.nodes[n][self.cols[n],:])              
+                            self.g[n].data *= self.hyper[0]
+                            self.g[n].data += (1-self.hyper[0])*self.dW[n].data**2
+                            self.dW[n].data *= np.sqrt((self.rms[n].data+self.hyper[1])/(self.g[n].data+self.hyper[1]))
+                            self.dnodes[n] = (self.W[n].T).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
+                            self.W[n].data -= self.dW[n].data
 
                         else:
-                            self.rms[i] *= self.hyper[0]
-                            self.rms[i] += (1-self.hyper[0])*self.dW[i]**2
-                            self.dW[i] = self.dnodes[i+1].dot(self.nodes[i].T)
-                            self.g[i] *= self.hyper[0]
-                            self.g[i] += (1-self.hyper[0])*self.dW[i]**2
-                            self.dW[i] *= np.sqrt((self.rms[i]+self.hyper[1])/(self.g[i]+self.hyper[1]))
-                            self.dnodes[i] = (self.W[i].T).dot(self.dnodes[i+1])*self.activation[1](self.nodes[i],self.pnodes[i])
-                            self.W[i] -= self.dW[i]
+                            self.rms[n] *= self.hyper[0]
+                            self.rms[n] += (1-self.hyper[0])*self.dW[n]**2
+                            self.dW[n] = self.dnodes[n+1].dot(self.nodes[n].T)
+                            self.g[n] *= self.hyper[0]
+                            self.g[n] += (1-self.hyper[0])*self.dW[n]**2
+                            self.dW[n] *= np.sqrt((self.rms[n]+self.hyper[1])/(self.g[n]+self.hyper[1]))
+                            self.dnodes[n] = (self.W[n].T).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
+                            self.W[n] -= self.dW[n]
 
             #Measure performance against test set:
             self.nodes[0] = test_data[0].T
             for n,i in enumerate(self.W):
-                self.pnodes[n+1] = i.dot(self.nodes[n])
-                self.nodes[n+1] = self.activation[0](self.pnodes[n+1])
+                self.nodes[n+1] = self.activation[0](i.dot(self.nodes[n]))
             target = np.zeros(test_data[4]*self.layout[-1])
             target[np.arange(0,test_data[4]*self.layout[-1],self.layout[-1])+test_data[1]]=1
             target = target.reshape(test_data[4],self.layout[-1]).T
@@ -147,25 +147,27 @@ class network:
             if c > self.best[1][0]:
                 self.best[1] = [c,a]
             self.best[2] = a
-            if self.sparsity: #remove self.sparsity[1] edges, introduce that many new ones
+            if self.sparsity and self.sparsity[1]: #remove self.sparsity[1] edges, introduce that many new ones
+                matrix_data = np.concatenate([i.data for i in self.W])
+                remove = int(self.sparsity[1]*self.size)
+                temp = np.argpartition(np.abs(matrix_data),remove)[:remove]
+                matrix_data[temp] = 0 #remove lowest few values of all edges (not per layer)
                 for n in range(len(self.W)):
-                    if self.sparsity[1]==0: continue
-                    s = np.size(self.W[n])
-                    remove = int(self.sparsity[1]*s)
-                    temp = np.argpartition(np.abs(self.W[n].data),remove)[:remove]
-                    self.W[n].data[temp] = 0 #remove lowest few values
+                    self.W[n].data = matrix_data[:np.size(self.W[n])]
+                    matrix_data = matrix_data[np.size(self.W[n]):]
                     self.W[n].eliminate_zeros()
                     self.W[n] = sparse.lil_matrix(self.W[n])
-                    while np.size(self.W[n])<s: #Need to be careful about picking already nonzero elements when choosing new edges to add
+                    s = round(remove*(np.size(self.W[n])/(self.size - remove)))  # Layer receives new edges proportional to percentage of edges already in this layer
+                    while s>0: #Need to be careful about picking already nonzero elements when choosing new edges to add
                         x, y = np.random.randint(0,self.layout[n+1]), np.random.randint(0,self.layout[n]) #not an idea solution but shouldn't be a huge bottleneck
                         if self.W[n][x,y] == 0:
-                            self.W[n][x,y] = np.random.randn(1) * np.sqrt(1/s)
+                            self.W[n][x,y] = 1e-10#np.random.randn(1) * np.sqrt(self.layout[n+1]/s)
+                            s-=1
                     self.W[n] = sparse.csr_matrix(self.W[n])
                     self.dW[n] = copy.deepcopy(self.W[n])
                     self.dW[n].data *= 0
                     self.cols[n], self.rows[n], _ = sparse.find(self.W[n].T)
-                    #self.sparsity[1] = 0.1
-            print(loss, c)
+            print(loss, c, np.size(self.W[0]), np.size(self.W[1]))
 
     def fitness(self,data):
         self.nodes[0] = data[0]

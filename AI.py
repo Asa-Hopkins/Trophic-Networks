@@ -2,6 +2,7 @@ import numpy as np
 import coherent_networks
 import copy
 from scipy import sparse
+import iteround #Has methods for rounding whilst preserving sum
 
 #import time; train, test = load_mnist(); x = network([784,10,10],[tanh,Dtanh]); t=time.time(); x.train(train,test); print(time.time()-t)
 
@@ -66,7 +67,6 @@ class network:
                 temp = np.nonzero(temp)
                 self.rows.append(temp[0])
                 self.cols.append(temp[1])
-                del(temp)
             else:
                 self.W.append(np.random.randn(layout[n+1],layout[n]) * np.sqrt(1/(layout[n])))
             self.size += np.size(self.W[-1])
@@ -152,20 +152,27 @@ class network:
                 remove = int(self.sparsity[1]*self.size)
                 temp = np.argpartition(np.abs(matrix_data),remove)[:remove]
                 matrix_data[temp] = 0 #remove lowest few values of all edges (not per layer)
+                s = np.size(self.W[0])
+                for n in range(1,len(self.W)):
+                    s = np.hstack( (s,np.size(self.W[n])))
+                s = iteround.saferound(remove*s/np.sum(s),0)
                 for n in range(len(self.W)):
                     self.W[n].data = matrix_data[:np.size(self.W[n])]
                     matrix_data = matrix_data[np.size(self.W[n]):]
                     self.W[n].eliminate_zeros()
                     self.W[n] = sparse.lil_matrix(self.W[n])
-                    s = round(remove*(np.size(self.W[n])/(self.size - remove)))  # Layer receives new edges proportional to percentage of edges already in this layer
-                    while s>0: #Need to be careful about picking already nonzero elements when choosing new edges to add
+                    while s[0]>0: #Need to be careful about picking already nonzero elements when choosing new edges to add
                         x, y = np.random.randint(0,self.layout[n+1]), np.random.randint(0,self.layout[n]) #not an idea solution but shouldn't be a huge bottleneck
                         if self.W[n][x,y] == 0:
                             self.W[n][x,y] = 1e-10#np.random.randn(1) * np.sqrt(self.layout[n+1]/s)
-                            s-=1
+                            s[0]-=1
+                    s = np.delete(s,0)
                     self.W[n] = sparse.csr_matrix(self.W[n])
                     self.dW[n] = copy.deepcopy(self.W[n])
                     self.dW[n].data *= 0
+                    if self.method == "AdaDelta":
+                        self.g[n] = copy.deepcopy(self.dW[n])
+                        self.rms[n] = copy.deepcopy(self.dW[n])
                     self.cols[n], self.rows[n], _ = sparse.find(self.W[n].T)
             print(loss, c, np.size(self.W[0]), np.size(self.W[1]))
 

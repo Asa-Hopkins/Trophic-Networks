@@ -1,0 +1,146 @@
+EPOCHS = 300 in all cases, all other values are left as the default (on 14/11/2021)
+The first list of "best" gives the minimum loss and the epoch it was achieved, the second gives the maximum accuracy.
+
+Results:
+ Normal:
+  1:
+   EMNIST
+   network = [784,200,100,47]
+   sparsity = [0,0.1] (giving 1446 edges)
+   best = [16021.852850074816, 292], [0.3918617021276596, 252]
+
+  2:
+   EMNIST
+   network = [784,100,47]
+   sparsity = [0,0.1] (giving 1020 edges)
+   best = [16478.20325170646, 289], [0.39611702127659576, 212]
+  3:
+   MNIST
+   network = [784,10,10]
+   sparsity = [0,0.1] (giving 832 edges)
+   best = [2631.459474753777, 191], [0.8453, 61]
+  4:
+   MNIST
+   network = [784,10,10]
+   sparsity = [0.75,0.1] (giving 247 edges)
+   best = [4152.245766264278, 295], [0.7506, 279]
+  5:
+   MNIST
+   network = [784,30,20,10]
+   sparsity = [0,0.1] (giving 881 edges)
+   best = [1340.2042074934247, 294], [0.9275, 266]
+  6:
+   MNIST
+   network = [784,30,20,10]
+   dense (giving 24320 layers)
+   best = [701.8341786162466, 102], [0.9606, 86]
+  7:
+   MNIST
+   network = [784,30,20,10]
+   sparsity = [-1,0.1] (giving 1745 edges)
+   best = [1036.2336077736034, 299], [0.9439, 290]
+  8:
+   MNIST
+   network = [784,10,10]
+   dense (giving 7940 edges)
+   best = [1859.2885572410523, 249], [0.903, 47]
+  9:
+   MNIST
+   network = [784,300,10]
+   sparsity = [-3,0.1] (giving 4113 edges)
+   best = [1818.9514226614183, 295], [0.9234, 281]
+  10:
+   MNIST
+   network = [784,100,80,60,40,10]
+   dense (giving 94000 edges)
+   best = [367.83190145129464, 66], [0.9782, 31]
+  11:
+   MNIST
+   network = [784,100,80,60,40,10]
+   sparsity = [-2,0.1] (giving 4012 edges)
+   best = [624.5976085969087, 287], [0.9652, 297]
+  12:
+   MNIST
+   network = [784,100,30,10]
+   sparsity = [0.6,0.1] (giving 428 edges)
+   best = [3875.0882878582884, 298], [0.7946, 277]
+  13:
+   MNIST
+   network = [784,100,30,10]
+   sparsity = [-5,0.1] (giving 6296 edges)
+   best = [633.8094323832241, 297], [0.9686, 284]
+ New:
+  1:
+   EMNIST
+   network = [784,200,100,47]
+   sparsity = [-0.3,0.1,exp(0)] (giving 1447 edges)
+   EPOCHS = 300
+   best = [16155.573102811082, 293], [0.4136170212765957, 296]
+  2:
+   EMNIST
+   network = [784,100,47]
+   sparsity = [-0.085, 0.1, exp(0)] (giving 1020 edges)
+   EPOCHS = 300
+   best = [15894.06164541117, 299], [0.3867553191489362, 244]
+  3:
+   MNIST
+   network = [784,10,10]
+   sparsity = [-0.07,0.1,exp(0)] (giving 830 edges)
+   EPOCHS = 300
+   best = [2125.6649170013075, 299], [0.8914, 234]
+  4:
+   MNIST
+   network = [784,10,10]
+   sparsity = [0.69, 0.1, exp(2)] (giving 245 edges)
+   EPOCHS = 300
+   best = [3771.2905013130476, 298], [0.8062, 283]
+  5:
+   MNIST
+   network = [784,30,20,10]
+   sparsity = [-0.08,0.1,exp(1)] (giving 882 edges)
+   EPOCHS = 300
+   best = [1915.9477920691697, 296], [0.8999, 278]
+  6:
+   MNIST
+   network = [784,30,20,10]
+   dense (giving 48140 edges)
+   EPOCHS = 300
+   best = [653.2828270778205, 154], [0.9697, 78]
+  7:
+   MNIST
+   network = [784,30,20,10]
+   sparsity = [-1.05,0.1, exp(1)] (giving 1745 layers)
+   EPOCHS = 300
+   best = [1129.1192773350037, 297], [0.9367, 295]
+  8:
+   MNIST
+   network = [784,10,10]
+   dense (giving 15780 edges)
+   EPOCHS = 300
+   best = [1786.2056453784032, 249], [0.9234, 265]
+  9:
+   MNIST
+   network = [784,300,10]
+   sparsity = [-2.9,0.1,exp(0)] (giving 4127 edges)
+   EPOCHS = 300
+   best = [1880.6589131614733, 298], [0.9279, 297]
+  10:
+   MNIST
+   network = [784,100,80,60,40,10]
+   dense (giving 258560 edges)
+   best = [400.81875879295313, 146], [0.979, 81]
+  11:
+   MNIST
+   network = [784,100,80,60,40,10]
+   sparsity = [-2.05,0.1,exp(2)] (giving 4018 edges)
+   best = [709.3547890918941, 298], [0.9611, 244]
+  12:
+   MNIST
+   network = [784,100,30,10]
+   sparsity = [0.563,0.1,exp(0)] (giving 428 edges)
+   best = [3585.11110889647, 299], [0.8172, 294]
+  13:
+   MNIST
+   network = [784,100,30,10]
+   sparsity = [-5.9,0.1,exp(0)] (giving 6328 edges)
+   best = [732.6306216492197, 299], [0.9643, 299]

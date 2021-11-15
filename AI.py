@@ -37,12 +37,14 @@ def load_balanced_emnist():
     f=open("./EMNIST/Balanced/emnist-balanced-test-labels-idx1-ubyte", 'rb'); test_labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
     return [images, labels, 784, 47, 112800], [test_images, test_labels, 784, 47, 18800]
 
+
 class network:
-    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.99,0.00001], sparsity=0):
+    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.99,0.00001], sparsity=0, sparseMethod="Local"):
         self.fit = 0
         self.size = 0
         self.correct = 0
         self.sparsity = sparsity # List containing hyperparameters epsilon and zeta (from 1707.04780)
+        self.sparseMethod = sparseMethod
         self.method = method
         self.hyper = hyper #Contains hyperparameters for the learning method used, e.g momentum and learning rate
         self.layout = layout
@@ -52,6 +54,7 @@ class network:
         self.activation = activation #activation[0] is activation function, [1] is its derivative.
         np.random.seed(seed)
         self.W = [] #List of weight matrices
+        self.dW1 = []
         self.rows = []
         self.cols = []
         self.nodes = [0]
@@ -61,6 +64,7 @@ class network:
             if sparsity:
                 temp = (1-sparsity[0])*(layout[n+1]+layout[n])/(layout[n+1]*layout[n])
                 self.W.append(np.random.randn(layout[n+1],layout[n]) * np.sqrt(1/(layout[n]*temp)))
+                self.dW1.append(np.zeros((layout[n+1],layout[n])))
                 temp = np.random.random((layout[n+1],layout[n])) < temp
                 self.W[-1] = sparse.csr_matrix(self.W[-1]*temp)
                 print(np.size(self.W[-1]))
@@ -100,7 +104,10 @@ class network:
                     self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])*self.hyper[1]
                     for n in range(len(self.W)-1,-1,-1):
                         if self.sparsity:
-                            self.dW[n].data *= self.hyper[0]
+                            self.dW[n] *= self.hyper[0]
+                            if data[4]//self.BATCH - j < 100 and (self.sparseMethod == "Global" or self.sparseMethod == "Local"):
+                                self.dW1[n] *= self.hyper[0]
+                                self.dW1[n] += self.dnodes[n+1].dot(self.nodes[n].T)
                             self.dW[n].data += np.einsum('ik,ik->i',self.dnodes[n+1].take(self.rows[n],0),self.nodes[n].take(self.cols[n],0))
                             self.dnodes[n] = (self.W[n].T).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
                             self.W[n].data -= self.dW[n].data
@@ -140,7 +147,7 @@ class network:
             target = np.zeros(test_data[4]*self.layout[-1])
             target[np.arange(0,test_data[4]*self.layout[-1],self.layout[-1])+test_data[1]]=1
             target = target.reshape(test_data[4],self.layout[-1]).T
-            c = np.sum(np.argmax(self.nodes[-1],0)==test[1])/test_data[4]
+            c = np.sum(np.argmax(self.nodes[-1],0)==test_data[1])/test_data[4]
             loss = np.sum((self.nodes[-1]-target)**2)
             if loss < self.best[0][0]:
                 self.best[0] = [loss,a]
@@ -152,29 +159,56 @@ class network:
                 remove = int(self.sparsity[1]*self.size)
                 temp = np.argpartition(np.abs(matrix_data),remove)[:remove]
                 matrix_data[temp] = 0 #remove lowest few values of all edges (not per layer)
-                s = np.size(self.W[0])
-                for n in range(1,len(self.W)):
-                    s = np.hstack( (s,np.size(self.W[n])))
-                s = iteround.saferound(remove*s/np.sum(s),0)
+
+                if self.sparseMethod == "Global":
+                    for n in range(len(self.W)):
+                        self.dW1[n][self.W[n].nonzero()] = 0 #This lets us avoid picking already nonzero elements
+                        #Skipping this line accidentally causes permanent removal of edges
+                        #The results of this are impressive, e.g 75% accuracy with 200 edges
+                    test = np.hstack([np.abs(i.ravel()) for i in self.dW1])
+                    test = (np.argpartition(test,-remove)[-remove:])
+                    test.sort()
+                    coords = np.split(test,test.searchsorted(np.cumsum([i.size for i in self.dW1])))
+                    total = 0
+                
+                if self.sparseMethod == "Local" or self.sparseMethod == "Random":
+                    s = np.size(self.W[0])
+                    for n in range(1,len(self.W)):
+                        s = np.hstack( (s,np.size(self.W[n])))
+                    if type(s)==type(1):
+                        s=np.array([s])
+                    s = iteround.saferound(remove*s/np.sum(s),0)
+                    
                 for n in range(len(self.W)):
                     self.W[n].data = matrix_data[:np.size(self.W[n])]
                     matrix_data = matrix_data[np.size(self.W[n]):]
                     self.W[n].eliminate_zeros()
                     self.W[n] = sparse.lil_matrix(self.W[n])
-                    while s[0]>0: #Need to be careful about picking already nonzero elements when choosing new edges to add
-                        x, y = np.random.randint(0,self.layout[n+1]), np.random.randint(0,self.layout[n]) #not an idea solution but shouldn't be a huge bottleneck
-                        if self.W[n][x,y] == 0:
-                            self.W[n][x,y] = 1e-10#np.random.randn(1) * np.sqrt(self.layout[n+1]/s)
-                            s[0]-=1
-                    s = np.delete(s,0)
+
+                    if self.sparseMethod == "Global":
+                        x, y = np.unravel_index(coords[n]-total,self.dW1[n].shape)
+                        total += self.dW1[n].size
+                        
+                    elif self.sparseMethod == "Local":
+                        self.dW1[n][self.W[n].nonzero()] = 0
+                        if int(s[0]+0.5)!=0:
+                            x, y = np.unravel_index(np.argpartition(np.abs(self.dW1[n]),-int(s[0]+0.5), axis=None)[-int(s[0]+0.5):], self.dW1[n].shape)
+                        s = np.delete(s,0)
+
+                    elif self.sparseMethod == "Random":
+                        while s[0]>0: #Need to be careful about picking already nonzero elements when choosing new edges to add
+                            x, y = np.random.randint(0,self.layout[n+1]), np.random.randint(0,self.layout[n]) #not an idea solution but shouldn't be a huge bottleneck
+                            if self.W[n][x,y] == 0:
+                                self.W[n][x,y] = 1e-10#np.random.randn(1) * np.sqrt(self.layout[n+1]/s)
+                                s[0]-=1
+                        s = np.delete(s,0)
+                    
+                    self.W[n][x,y] = 1e-10
                     self.W[n] = sparse.csr_matrix(self.W[n])
                     self.dW[n] = copy.deepcopy(self.W[n])
                     self.dW[n].data *= 0
-                    if self.method == "AdaDelta":
-                        self.g[n] = copy.deepcopy(self.dW[n])
-                        self.rms[n] = copy.deepcopy(self.dW[n])
-                    self.cols[n], self.rows[n], _ = sparse.find(self.W[n].T)
-            print(loss, c, np.size(self.W[0]), np.size(self.W[1]))
+                    self.cols[n], self.rows[n], _ = sparse.find(self.W[n].T)                        
+            print(loss, c)
 
     def fitness(self,data):
         self.nodes[0] = data[0]

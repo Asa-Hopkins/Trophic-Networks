@@ -3,9 +3,8 @@ import coherent_networks
 import copy
 from scipy import sparse
 import iteround #Has methods for rounding whilst preserving sum
-
-#import time; train, test = load_mnist(); x = network([784,10,10],[tanh,Dtanh]); t=time.time(); x.train(train,test); print(time.time()-t)
-
+#import time; train, test = load_mnist(); x = network([784,10,10],hyper=[0.9719886225498603,10**-4.588543463375197]); t=time.time(); x.train(train,test); print(time.time()-t)
+#time 858.8292527520002
 def sigmoid(x):
     return 1/(1+np.exp(-x))
 
@@ -39,7 +38,7 @@ def load_balanced_emnist():
 
 
 class network:
-    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.99,0.00001], sparsity=0, sparseMethod="Local"):
+    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.99,1e-5], sparsity=0, sparseMethod="Local"):
         self.fit = 0
         self.size = 0
         self.correct = 0
@@ -54,6 +53,7 @@ class network:
         self.activation = activation #activation[0] is activation function, [1] is its derivative.
         np.random.seed(seed)
         self.W = [] #List of weight matrices
+        self.WT = []
         self.dW1 = []
         self.rows = []
         self.cols = []
@@ -64,6 +64,7 @@ class network:
             if sparsity:
                 temp = (1-sparsity[0])*(layout[n+1]+layout[n])/(layout[n+1]*layout[n])
                 self.W.append(np.random.randn(layout[n+1],layout[n]) * np.sqrt(1/(layout[n]*temp)))
+                self.WT.append(sparse.csr_matrix(self.W[-1].T))
                 self.dW1.append(np.zeros((layout[n+1],layout[n])))
                 temp = np.random.random((layout[n+1],layout[n])) < temp
                 self.W[-1] = sparse.csr_matrix(self.W[-1]*temp)
@@ -109,7 +110,7 @@ class network:
                                 self.dW1[n] *= self.hyper[0]
                                 self.dW1[n] += self.dnodes[n+1].dot(self.nodes[n].T)
                             self.dW[n].data += np.einsum('ik,ik->i',self.dnodes[n+1].take(self.rows[n],0),self.nodes[n].take(self.cols[n],0))
-                            self.dnodes[n] = (self.W[n].T).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
+                            self.dnodes[n] = (self.WT[n]).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
                             self.W[n].data -= self.dW[n].data
                         else:
                             self.dW[n] *= self.hyper[0]
@@ -127,7 +128,7 @@ class network:
                             self.g[n].data *= self.hyper[0]
                             self.g[n].data += (1-self.hyper[0])*self.dW[n].data**2
                             self.dW[n].data *= np.sqrt((self.rms[n].data+self.hyper[1])/(self.g[n].data+self.hyper[1]))
-                            self.dnodes[n] = (self.W[n].T).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
+                            self.dnodes[n] = (self.WT[n]).dot(self.dnodes[n+1])*self.activation[1](self.nodes[n],self.pnodes[n])
                             self.W[n].data -= self.dW[n].data
 
                         else:
@@ -187,28 +188,30 @@ class network:
 
                     if self.sparseMethod == "Global":
                         x, y = np.unravel_index(coords[n]-total,self.dW1[n].shape)
+                        self.W[n][x,y] = 1e-10
                         total += self.dW1[n].size
                         
                     elif self.sparseMethod == "Local":
                         self.dW1[n][self.W[n].nonzero()] = 0
                         if int(s[0]+0.5)!=0:
                             x, y = np.unravel_index(np.argpartition(np.abs(self.dW1[n]),-int(s[0]+0.5), axis=None)[-int(s[0]+0.5):], self.dW1[n].shape)
+                            self.W[n][x,y] = 1e-10
                         s = np.delete(s,0)
 
                     elif self.sparseMethod == "Random":
                         while s[0]>0: #Need to be careful about picking already nonzero elements when choosing new edges to add
                             x, y = np.random.randint(0,self.layout[n+1]), np.random.randint(0,self.layout[n]) #not an idea solution but shouldn't be a huge bottleneck
                             if self.W[n][x,y] == 0:
-                                self.W[n][x,y] = 1e-10#np.random.randn(1) * np.sqrt(self.layout[n+1]/s)
+                                self.W[n][x,y] = 1e-10
                                 s[0]-=1
                         s = np.delete(s,0)
-                    
-                    self.W[n][x,y] = 1e-10
+                    self.WT[n] = sparse.csr_matrix(self.W[n].T)
                     self.W[n] = sparse.csr_matrix(self.W[n])
                     self.dW[n] = copy.deepcopy(self.W[n])
                     self.dW[n].data *= 0
-                    self.cols[n], self.rows[n], _ = sparse.find(self.W[n].T)                        
+                    self.cols[n], self.rows[n], _ = sparse.find(self.WT[n])
             print(loss, c)
+        return c
 
     def fitness(self,data):
         self.nodes[0] = data[0]

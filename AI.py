@@ -49,7 +49,8 @@ class network:
         self.layout = np.array(layout)
         if np.any(np.array(incoherence,dtype=object)):
             self.incoherence = [np.array(a) for a in incoherence] #A list of lists containing which layers to connect to
-            self.out = [np.sum(self.layout[a]) for a in self.incoherence]
+            self.out = [np.sum(self.layout[n+a]) for n,a in enumerate(self.incoherence)]
+            #Each list describes layers to connect to, relative to current layer.
         else:
             self.incoherence = incoherence
             self.out = self.layout[1:] #number of output nodes for each layer

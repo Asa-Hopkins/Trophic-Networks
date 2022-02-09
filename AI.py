@@ -1,10 +1,13 @@
 import numpy as np
 import coherent_networks
+import entropy
 import copy
 from scipy import sparse
-import time
 import iteround #Has methods for rounding whilst preserving sum
-#train, test = load_mnist(); x = network([784,10,10], sparseMethod="SWD", sparsity=[0.1,1e-3,1]); x.train(train,test, EPOCHS=30);
+import data
+#train, test = data.load_mnist(); data.process(train,test, filepath="./MNIST/entropy",threshold = 0.5);x = network([train[2],10,10]); x.train(train,test, EPOCHS=30);
+#train, test = data.load_mnist(); data.cov(train,test,100);x = network([train[2],10,10]); x.train(train,test, EPOCHS=30);
+
 def sigmoid(x):
     return 1/(1+np.exp(-x))
 
@@ -16,26 +19,6 @@ def tanh(x):
 
 def Dtanh(x,y):
     return (1-x*x)
-
-def load_mnist():
-    """Loads the classic MNIST data set, returns a pair of lists (one for the training set, one for the testing set) containing
-    the images,labels, inputs per image, number of classes and number of images."""
-    f=open("./MNIST/train-images.idx3-ubyte",'rb');images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(60000,784)/255.0;f.close()
-    f=open("./MNIST/train-labels.idx1-ubyte",'rb');labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
-    f=open("./MNIST/t10k-images.idx3-ubyte",'rb');test_images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(10000,784)/255.0;f.close()
-    f=open("./MNIST/t10k-labels.idx1-ubyte",'rb');test_labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
-    images -= np.mean(images); test_images -= np.mean(test_images)
-    return [images, labels, 784, 10, 60000], [test_images, test_labels, 784, 10, 10000]
-
-def load_balanced_emnist():
-    """Loads the extended MNIST data set, returns a pair of lists (one for the training set, one for the testing set) containing
-        the images,labels, inputs per image, number of classes and number of images."""
-    f=open("./EMNIST/Balanced/emnist-balanced-train-images-idx3-ubyte", 'rb'); images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(112800,784)/255.0; f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-train-labels-idx1-ubyte", 'rb'); labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-test-images-idx3-ubyte", 'rb'); test_images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(18800,784)/255.0; f.close()
-    f=open("./EMNIST/Balanced/emnist-balanced-test-labels-idx1-ubyte", 'rb'); test_labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
-    return [images, labels, 784, 47, 112800], [test_images, test_labels, 784, 47, 18800]
-
 
 class network:
     def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.9,2e-4], sparsity=0, sparseMethod="SNFS", incoherence=False):
@@ -50,7 +33,6 @@ class network:
         if np.any(np.array(incoherence,dtype=object)):
             self.incoherence = [np.array(a) for a in incoherence] #A list of lists containing which layers to connect to
             self.out = [np.sum(self.layout[n+a]) for n,a in enumerate(self.incoherence)]
-            #Each list describes layers to connect to, relative to current layer.
         else:
             self.incoherence = incoherence
             self.out = self.layout[1:] #number of output nodes for each layer
@@ -60,12 +42,12 @@ class network:
         self.activation = activation #activation[0] is activation function, [1] is its derivative.
         self.rng = np.random.default_rng(seed=seed)
         self.W = [] #List of weight matrices
+        self.s = np.zeros(len(layout)-1) #Size of each layer
         if sparsity:
             self.WT = [] #Transpose of that matrix (speeds up sparse calculations)
             self.dW1 = [] #Dense gradient
             self.rows = [] #Row coordinates of nonzero elements
             self.cols = [] #Column coordinates of nonzero elements
-            self.s = np.zeros(len(layout)-1) #Size of each layer
             self.meanMom = np.zeros(len(layout)-1) #Mean momentum for a layer, used for SNFS
             if sparseMethod != "SWD":
                 scale = 0
@@ -74,7 +56,6 @@ class network:
                     scale += self.out[n]+self.layout[n]
                     size += self.out[n]*self.layout[n]
                 scale = (np.exp(sparsity[0]) - 1)*size / scale
-                print(sparsity[0]*size)
         self.nodes = [0]
         self.dnodes = [0]
         self.pnodes = [0] #Contains value of nodes before activation function, used for some derivatives
@@ -144,7 +125,7 @@ class network:
                     for n in range(len(self.W)-1,-1,-1):
                         if self.sparsity and self.sparseMethod!="SWD":
                             self.dW[n].data *= self.hyper[0]
-                            if (data[4]//self.BATCH - j < 2/self.hyper[0] and self.sparseMethod == "SNFS") or (data[4]//self.BATCH == j+1 and self.sparseMethod == "RigL"):
+                            if (data[4]//self.BATCH - j < 2/self.hyper[0] and self.sparseMethod == "SNFS") or (data[4]//self.BATCH - j < 2/self.hyper[0] and self.sparseMethod == "RigL"):
                                 self.dW1[n] *= self.hyper[0]
                             if self.incoherence:
                                 temp = np.vstack([self.dnodes[n+k] for k in self.incoherence[n]])
@@ -171,31 +152,14 @@ class network:
                                 self.W[n] -= temp * WD
 
             #Measure performance against test set:
-            self.nodes[0] = test_data[0].T
-            for i in range(len(self.W)):
-                self.pnodes[i+1] = np.zeros((self.layout[i+1],test_data[4])) #set to correct shapes
-                self.nodes[i+1] = np.zeros((self.layout[i+1],test_data[4]))
-            
-            for n,i in enumerate(self.W):
-                if self.incoherence:
-                    temp = i.dot(self.nodes[n]) #calculate contribution to all future layers
-                    for k in self.incoherence[n]:
-                        self.pnodes[n+k] += temp[:len(self.pnodes[n+k])]
-                        temp = temp[len(self.pnodes[n+k]):]
-                else:
-                    self.pnodes[n+1] = i.dot(self.nodes[n])
-                self.nodes[n+1] = self.activation[0](self.pnodes[n+1])
-            #print(np.sum(np.abs(self.nodes[-1])))
-            target = np.zeros(test_data[4]*self.layout[-1])
-            target[np.arange(0,test_data[4]*self.layout[-1],self.layout[-1])+test_data[1]]=1
-            target = target.reshape(test_data[4],self.layout[-1]).T
-            c = np.sum(np.argmax(self.nodes[-1],0)==test_data[1])/test_data[4]
-            loss = np.sum((self.nodes[-1]-target)**2)
+            c, loss = self.test(test_data)
             if loss < self.best[0][0]:
                 self.best[0] = [loss,a]
             if c > self.best[1][0]:
                 self.best[1] = [c,a]
             self.best[2] = a
+
+            #self.W[0][np.argsort(entropy.Centropy(self.nodes[1]))[-1]]*=0
             
             if self.sparsity and self.sparsity[1] and self.sparseMethod!="SWD": #remove self.sparsity[1] edges, introduce that many new ones
                 p = self.sparsity[1] * (1- a/EPOCHS) #Linear annealing
@@ -203,7 +167,8 @@ class network:
                 if self.sparseMethod == "SNFS":
                     for n in range(len(self.W)):
                         self.s[n] = np.size(self.W[n]) #edges per layer before removal
-                        self.meanMom[n] = np.mean(np.abs(self.dW[n].data)); #mean absolute momentum
+                        self.meanMom[n] = np.mean(np.abs(self.dW[n].data)) #mean absolute momentum
+
                     self.meanMom/=np.sum(self.meanMom)
                     totalRemove = 0
                     for n in range(len(self.W)):
@@ -216,6 +181,7 @@ class network:
                         self.W[n].data[temp] = 0
                         self.W[n].eliminate_zeros()
                         totalRemove+=remove
+                        self.dW1[n][self.dW1[n] == 0] = 1e-10
                         self.dW1[n][self.W[n].nonzero()] = 0 #This lets us avoid picking already nonzero elements
                         #Skipping this line accidentally causes permanent removal of edges
                     add = totalRemove*self.meanMom
@@ -260,6 +226,7 @@ class network:
                         self.W[n].data[temp] = 0
                         self.W[n].eliminate_zeros()
                         self.W[n] = sparse.lil_matrix(self.W[n])
+                        self.dW1[n][self.dW1[n] == 0] = 1e-10
                         self.dW1[n][self.W[n].nonzero()] = 0
                         if remove!=0:
                             x, y = np.unravel_index(np.argpartition(np.abs(self.dW1[n]),-remove, axis=None)[-remove:], self.dW1[n].shape)
@@ -274,3 +241,49 @@ class network:
             #    self.hyper[1] *= 1-2/EPOCHS #Decay learning rate, should be around 10% of initial by the end
             print(loss, c, [np.size(i) for i in self.W], np.sum([np.size(i) for i in self.W]))
         return c
+
+    def test(self,test_data, off = {}):
+        self.nodes[0] = test_data[0].T
+        for i in range(len(self.W)):
+            self.pnodes[i+1] = np.zeros((self.layout[i+1],test_data[4])) #set to correct shapes
+            self.nodes[i+1] = np.zeros((self.layout[i+1],test_data[4]))
+        
+        for n,i in enumerate(self.W):
+            if self.incoherence:
+                temp = i.dot(self.nodes[n]) #calculate contribution to all future layers
+                for k in self.incoherence[n]:
+                    self.pnodes[n+k] += temp[:len(self.pnodes[n+k])]
+                    temp = temp[len(self.pnodes[n+k]):]
+            else:
+                self.pnodes[n+1] = i.dot(self.nodes[n])
+            if n+1 in off.keys():
+                self.pnodes[n+1][off[n+1]] *= 0
+            self.nodes[n+1] = self.activation[0](self.pnodes[n+1])
+        target = np.zeros(test_data[4]*self.layout[-1])
+        target[np.arange(0,test_data[4]*self.layout[-1],self.layout[-1])+test_data[1]]=1
+        target = target.reshape(test_data[4],self.layout[-1]).T
+        c = np.sum(np.argmax(self.nodes[-1],0)==test_data[1])/test_data[4]
+        loss = np.sum((self.nodes[-1]-target)**2)
+        return c, loss
+    
+    def convert(self,sparseMethod = "SNFS", sparsity = [0.1,0.1], threshold = 1e-6): #converts a SWD network to a true sparse network, and allows for sparse training
+        self.WT = []
+        self.dW = []
+        self.dW1 = []
+        self.cols = []; self.rows = []
+        for n,i in enumerate(self.W):
+            self.dW1.append(i*0)
+            sparsity[0] += np.sum([np.abs(i) > threshold])
+            i[np.abs(i) < threshold] = 0
+            i = sparse.coo_matrix(i)
+            self.WT.append(sparse.csr_matrix(i.T))
+            i = sparse.csr_matrix(i)
+            self.dW.append(copy.deepcopy(i))
+            self.dW[-1].data *= 0
+            a, b, _ = sparse.find(self.WT[-1])
+            self.cols.append(a)
+            self.rows.append(b)
+            self.W[n] = i
+        self.sparseMethod = sparseMethod
+        sparsity[0] /= self.size
+        self.sparsity = sparsity

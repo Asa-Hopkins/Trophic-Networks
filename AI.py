@@ -1,6 +1,5 @@
 import numpy as np
 import coherent_networks
-import entropy
 import copy
 from scipy import sparse
 import iteround #Has methods for rounding whilst preserving sum
@@ -158,8 +157,6 @@ class network:
             if c > self.best[1][0]:
                 self.best[1] = [c,a]
             self.best[2] = a
-
-            #self.W[0][np.argsort(entropy.Centropy(self.nodes[1]))[-1]]*=0
             
             if self.sparsity and self.sparsity[1] and self.sparseMethod!="SWD": #remove self.sparsity[1] edges, introduce that many new ones
                 p = self.sparsity[1] * (1- a/EPOCHS) #Linear annealing
@@ -238,7 +235,6 @@ class network:
                     self.dW[n].data *= 0
                     self.dW1[n] *= 0
                     self.cols[n], self.rows[n], _ = sparse.find(self.WT[n])
-            #    self.hyper[1] *= 1-2/EPOCHS #Decay learning rate, should be around 10% of initial by the end
             print(loss, c, [np.size(i) for i in self.W], np.sum([np.size(i) for i in self.W]))
         return c
 

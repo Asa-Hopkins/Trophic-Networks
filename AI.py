@@ -4,8 +4,8 @@ import copy
 from scipy import sparse
 import iteround #Has methods for rounding whilst preserving sum
 import data
-#train, test = data.load_mnist(); data.process_entropy(train,test, filepath="./MNIST/entropy",threshold = 0.5);x = network([train[2],10,10]); x.train(train,test, EPOCHS=30);
-#train, test = data.load_mnist(); data.cov(train,test,100);x = network([train[2],10,10]); x.train(train,test, EPOCHS=30);
+#train, test = data.load_mnist();x = network([train[2],10,10]); x.train(train,test, EPOCHS=10);
+#train, test = data.load_balanced_emnist();data.process_entropy(train,test);data.process_pca(train,test,num=200);
 
 def sigmoid(x):
     return 1/(1+np.exp(-x))
@@ -268,6 +268,12 @@ class network:
         self.dW = []
         self.dW1 = []
         self.cols = []; self.rows = []
+        if sparseMethod == "SNFS":
+            self.meanMom = np.zeros(len(self.layout)-1) #Mean momentum for a layer, used for SNFS
+        if sparseMethod == "RigL":
+            self.s = []
+            for i in self.W:
+                self.s.append(i.size)
         for n,i in enumerate(self.W):
             self.dW1.append(i*0)
             sparsity[0] += np.sum([np.abs(i) > threshold])
@@ -284,5 +290,14 @@ class network:
         self.sparseMethod = sparseMethod
         sparsity[0] /= self.size
         self.sparsity = sparsity
-    def convert_incoherent(self):
+        
+    def convert_incoherent(self,incoherence, sparseMethod = "SNFS", sparsity = [0.1,0.01]): #Converts a coherent network to a (sparse) incoherent one.
+        #The idea here is to convert to dense incoherent with the new edges all 0, so the conversion to sparse gets the right amount of edges.
+        self.incoherence = incoherence
+        self.incoherence = [np.array(a) for a in incoherence] #A list of lists containing which layers to connect to
+        self.out = [np.sum(self.layout[n+a]) for n,a in enumerate(self.incoherence)]
+        for n in range(len(self.W)):
+            i = self.W[n].shape
+            self.W[n] = np.vstack((self.W[n],np.zeros((self.out[n]-i[0],i[1])) ))
+        self.convert(sparseMethod = sparseMethod, sparsity = sparsity)
         

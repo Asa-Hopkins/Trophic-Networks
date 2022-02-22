@@ -4,7 +4,7 @@ import copy
 from scipy import sparse
 import iteround #Has methods for rounding whilst preserving sum
 import data
-#train, test = data.load_mnist(); data.process(train,test, filepath="./MNIST/entropy",threshold = 0.5);x = network([train[2],10,10]); x.train(train,test, EPOCHS=30);
+#train, test = data.load_mnist(); data.process_entropy(train,test, filepath="./MNIST/entropy",threshold = 0.5);x = network([train[2],10,10]); x.train(train,test, EPOCHS=30);
 #train, test = data.load_mnist(); data.cov(train,test,100);x = network([train[2],10,10]); x.train(train,test, EPOCHS=30);
 
 def sigmoid(x):
@@ -20,7 +20,7 @@ def Dtanh(x,y):
     return (1-x*x)
 
 class network:
-    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.9,2e-4], sparsity=0, sparseMethod="SNFS", incoherence=False):
+    def __init__(self, layout, activation=[lambda x: np.tanh(x), lambda x,y: 1-x*x], BATCH=32, seed=42, method="Momentum", hyper=[0.9,2e-4, 0.9], sparsity=0, sparseMethod="SNFS", incoherence=False):
         self.fit = 0
         self.size = 0
         self.correct = 0
@@ -28,6 +28,7 @@ class network:
         self.sparseMethod = sparseMethod
         self.method = method
         self.hyper = hyper #Contains hyperparameters for the learning method used, e.g momentum and learning rate
+        self.eta = self.hyper[1] #Eta will attenuate over training, but it's important that the original value is kept
         self.layout = np.array(layout)
         if np.any(np.array(incoherence,dtype=object)):
             self.incoherence = [np.array(a) for a in incoherence] #A list of lists containing which layers to connect to
@@ -87,6 +88,7 @@ class network:
         self.rms = copy.deepcopy(self.dW)
 
     def train(self, data, test_data,EPOCHS=10):
+        self.eta = self.hyper[1]
         for a in range(EPOCHS):
             randints = self.rng.integers(data[4],size=(data[4] - data[4]%self.BATCH)) #train for EPOCHS, testing after each
             for j in range(data[4]//self.BATCH):
@@ -114,9 +116,7 @@ class network:
                                  
                 #Back propagation:
                 if self.method == "Momentum":
-                    self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])*self.hyper[1]*(1-2/EPOCHS)**a
-                    #includes term for annealing of learning rate, should reach about 10% of initial by the end
-                    #Changin self.hyper[1] directly caused issues with reproducibility
+                    self.dnodes[-1] = 2*(self.nodes[-1]-target)*self.activation[1](self.nodes[-1],self.pnodes[-1])*self.eta
                     if self.sparseMethod == "SWD":
                         keep = int(self.size*self.sparsity[0]) #self.sparsity[0] is target sparsity
                         threshold = np.partition(np.hstack([np.abs(i).ravel() for i in self.W]),-keep)[-keep]
@@ -235,6 +235,7 @@ class network:
                     self.dW[n].data *= 0
                     self.dW1[n] *= 0
                     self.cols[n], self.rows[n], _ = sparse.find(self.WT[n])
+            self.eta *= self.hyper[2] #Annealing of learning rate
             print(loss, c, [np.size(i) for i in self.W], np.sum([np.size(i) for i in self.W]))
         return c
 
@@ -283,3 +284,5 @@ class network:
         self.sparseMethod = sparseMethod
         sparsity[0] /= self.size
         self.sparsity = sparsity
+    def convert_incoherent(self):
+        

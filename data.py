@@ -45,9 +45,8 @@ def process_pca(train, test, threshold = 0.01, num = False):
         ind = train[2] - num
     else:
         ind = np.searchsorted(s,s[-1]*threshold)
-    vec = vec[ind:]
-    test[0] = np.dot(test[0],vec.T)
-    train[0] = np.dot(train[0],vec.T)
+    test[0] = np.linalg.solve(vec,test[0].T)[ind:].T
+    train[0] = np.linalg.solve(vec,train[0].T)[ind:].T
     test[2] = test[0].shape[1]
     train[2] = train[0].shape[1]
     
@@ -58,7 +57,8 @@ def load_mnist():
     f=open("./MNIST/train-labels.idx1-ubyte",'rb');labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
     f=open("./MNIST/t10k-images.idx3-ubyte",'rb');test_images = np.frombuffer(f.read()[16:],dtype=np.uint8).reshape(10000,784)/255.0;f.close()
     f=open("./MNIST/t10k-labels.idx1-ubyte",'rb');test_labels = np.frombuffer(f.read()[8:],dtype=np.uint8);f.close()
-    images -= np.mean(images); test_images -= np.mean(test_images)
+    temp = np.mean(images)
+    images -= temp; test_images -= temp
     return [images, labels, 784, 10, 60000], [test_images, test_labels, 784, 10, 10000]
 
 def load_balanced_emnist():
@@ -68,7 +68,10 @@ def load_balanced_emnist():
     f=open("./EMNIST/Balanced/emnist-balanced-train-labels-idx1-ubyte", 'rb'); labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
     f=open("./EMNIST/Balanced/emnist-balanced-test-images-idx3-ubyte", 'rb'); test_images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(18800,784)/255.0; f.close()
     f=open("./EMNIST/Balanced/emnist-balanced-test-labels-idx1-ubyte", 'rb'); test_labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
-    images -= np.mean(images); test_images -= np.mean(test_images)
+    scaler = StandardScaler()
+    scaler.fit(images)
+    temp = np.mean(images)
+    images -= temp; test_images -= temp
     return [images, labels, 784, 47, 112800], [test_images, test_labels, 784, 47, 18800]
 
 

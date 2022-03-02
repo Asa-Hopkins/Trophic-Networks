@@ -68,8 +68,6 @@ def load_balanced_emnist():
     f=open("./EMNIST/Balanced/emnist-balanced-train-labels-idx1-ubyte", 'rb'); labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
     f=open("./EMNIST/Balanced/emnist-balanced-test-images-idx3-ubyte", 'rb'); test_images = np.frombuffer(f.read()[16:], dtype=np.uint8).reshape(18800,784)/255.0; f.close()
     f=open("./EMNIST/Balanced/emnist-balanced-test-labels-idx1-ubyte", 'rb'); test_labels = np.frombuffer(f.read()[8:], dtype=np.uint8); f.close()
-    scaler = StandardScaler()
-    scaler.fit(images)
     temp = np.mean(images)
     images -= temp; test_images -= temp
     return [images, labels, 784, 47, 112800], [test_images, test_labels, 784, 47, 18800]

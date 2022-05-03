@@ -229,4 +229,65 @@ def edges(G):
         temp = temp.union(i[2])
     return edges, layers, level
 
+def analyse(x):
+    #x is an AI.network object
+    G = nx.DiGraph()
+    G.add_nodes_from(range(0,sum(x.layout)))
+    for n in range(0,len(x.layout)-1):
+        for k in x.incoherence[n]:
+            temp = np.nonzero(x.W[n])
+            G.add_edges_from(zip(*(temp[0]+sum(x.layout[:n]),temp[1]+sum(x.layout[:n+k]))))
+    return coherence_stats(G)["q"]
+    
 #G = coherent_graph(B=10, N=100, L=200, T=0.5);x,y,z = edges(G); s=coherence_stats(G)
+
+def connectivity(length, style, params, includeInput = False):
+    #A helper function for generating connectivity arrays in preset styles
+    length -= 1 #exclude output layer
+    styles = {"All to All":0, "ResNetX":1, "MaxDist1":2, "MaxDist2":3}
+    if type(style) == type("string"):
+        style = styles[style]
+    con = []
+    
+    if style == 0:
+        for a in range(length,0,-1):
+            con.append(list(range(1,a+1)))
+            
+    elif style == 1:
+        t = params[0]
+        con.append([1])
+        for l in range(1,length):
+            if l < t:
+                i = 1
+            else:
+                i2 = l % (2*(t - 1))
+                if i2 >= 1 and i2 <= t-1:
+                    i = 2*i2
+                else:
+                    i3 = (i2 + t - 1)%(2 * (t - 1))
+                    i = 2*i3
+            con[-i].append(i)
+            con.append([1])
+                
+    elif style == 2: #All layers connect to the output layer
+        for a in range(0,length):
+            if length-a != 1:
+                con.append([1,length-a])
+            else:
+                con.append([1])
+
+    elif style == 3: #All layers connect to a "relay" layer, which then connects to the output
+        for a in range(0,length):
+            temp = (length - a)%params[0]
+            if temp > 1:
+                con.append([1,temp])
+            elif temp == 1:
+                con.append([1])
+            else:
+                con.append([1,length-a])
+                
+    
+    if not includeInput:
+        con[0] = [1]
+    return con
+
